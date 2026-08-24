@@ -289,6 +289,25 @@
   </div>
 </div>
 
+<div class="modal-overlay" id="modal-custom-phrase">
+  <div class="modal modal-sm">
+    <div class="modal-header"><div class="modal-title">Add Custom Phrase</div><button class="modal-close" onclick="closeModal('modal-custom-phrase')">×</button></div>
+    <div class="modal-body">
+      <div class="form-group"><label class="form-label">Category</label>
+        <select class="form-select" id="cp-cat">
+          <option>Documentation</option>
+          <option>Provider Communications</option>
+          <option>Patient Communications</option>
+          <option>My Phrases</option>
+        </select>
+      </div>
+      <div class="form-group"><label class="form-label">Title *</label><input class="form-input" id="cp-title" placeholder="Short descriptive name..."></div>
+      <div class="form-group"><label class="form-label">Phrase Text *</label><textarea class="form-textarea" id="cp-text" style="min-height:140px" placeholder="Full phrase text..."></textarea></div>
+    </div>
+    <div class="modal-footer"><button class="btn btn-secondary" onclick="closeModal('modal-custom-phrase')">Cancel</button><button class="btn btn-primary" onclick="saveCustomPhrase()">Save Phrase</button></div>
+  </div>
+</div>
+
 <div class="modal-overlay" id="modal-process">
   <div class="modal">
     <div class="modal-header"><div class="modal-title">Generate Clinical Note</div><button class="modal-close" onclick="closeModal('modal-process')">×</button></div>
@@ -315,7 +334,7 @@ const db = getFirestore(fbApp);
 function setSync(s){const d=document.getElementById('sync-dot'),l=document.getElementById('sync-label');if(!d)return;d.className='sync-dot '+s;l.textContent=s==='synced'?'Synced':s==='syncing'?'Saving...':s==='error'?'Offline':'Connecting...';}
 
 // ===== STATE =====
-let S={patients:[],entries:[],view:'dashboard',pid:null,tab:'bnc',showArchived:false,templates:[],library:[],aiBehaviors:{}};
+let S={patients:[],entries:[],view:'dashboard',pid:null,tab:'bnc',showArchived:false,templates:[],library:[],aiBehaviors:{},customPhrases:[]};
 let loaded={patients:false,entries:false};
 
 function reveal(){if(loaded.patients&&loaded.entries){document.getElementById('loading-screen').style.display='none';document.getElementById('app-shell').style.display='flex';}}
@@ -335,6 +354,7 @@ onSnapshot(collection(db,'meta'),snap=>{
     if(d.id==='templates')S.templates=d.data().items||[];
     if(d.id==='library')S.library=d.data().items||[];
     if(d.id==='aiBehaviors')S.aiBehaviors=d.data()||{};
+    if(d.id==='customPhrases')S.customPhrases=d.data().items||[];
   });
   rerender();
 },()=>{});
@@ -842,13 +862,46 @@ const PHRASES=[
 let phraseData={};
 function renderPhrases(){
   const main=document.getElementById('main-content');if(!main)return;
-  const cats=[...new Set(PHRASES.map(p=>p.cat))];
-  phraseData={};PHRASES.forEach((p,i)=>phraseData['ph'+i]=p.text);
-  main.innerHTML=`<div class="page-header"><div><div class="page-title">Quick Phrases</div><div class="page-subtitle">Tap any phrase to copy it</div></div></div>
-  ${cats.map(cat=>`<div class="card"><div class="card-title"><span class="card-title-left">📁 ${cat}</span></div>
-    ${PHRASES.map((p,i)=>p.cat===cat?`<div class="phrase-item" onclick="copyPhrase('ph${i}',this)"><div class="phrase-title">${esc(p.title)}</div><div class="phrase-preview">${esc(p.text.replace(/\n/g,' ').slice(0,110))}...</div><div class="phrase-copied">✓ Copied!</div></div>`:'').join('')}
-  </div>`).join('')}`;
+  // Built-in phrases by category
+  const builtInCats=[...new Set(PHRASES.map(p=>p.cat))];
+  phraseData={};
+  PHRASES.forEach((p,i)=>phraseData['ph'+i]=p.text);
+  // Custom phrases from Firebase
+  const custom=S.customPhrases||[];
+  custom.forEach((p,i)=>phraseData['cp'+i]=p.text);
+  // All categories including custom
+  const customCats=[...new Set(custom.map(p=>p.cat))].filter(c=>!builtInCats.includes(c));
+  const allCats=[...builtInCats,...customCats];
+  main.innerHTML=`
+    <div class="page-header">
+      <div><div class="page-title">Quick Phrases</div><div class="page-subtitle">Tap any phrase to copy it</div></div>
+      <button class="btn btn-primary" onclick="openAddCustomPhrase()">＋ Add Phrase</button>
+    </div>
+    ${allCats.map(cat=>{
+      const builtIn=PHRASES.map((p,i)=>p.cat===cat?`<div class="phrase-item" onclick="copyPhrase('ph${i}',this)"><div class="phrase-title">${esc(p.title)}</div><div class="phrase-preview">${esc(p.text.replace(/\n/g,' ').slice(0,110))}...</div><div class="phrase-copied">✓ Copied!</div></div>`:'').join('');
+      const mine=custom.map((p,i)=>p.cat===cat?`<div class="phrase-item" style="border-left:3px solid var(--accent2)" onclick="copyPhrase('cp${i}',this)"><div style="display:flex;justify-content:space-between;align-items:flex-start"><div><div class="phrase-title">⭐ ${esc(p.title)}</div><div class="phrase-preview">${esc(p.text.replace(/\n/g,' ').slice(0,110))}...</div></div><button onclick="event.stopPropagation();delCustomPhrase(${i})" style="background:none;border:none;cursor:pointer;color:var(--text3);font-size:15px;padding:0 0 0 8px;flex-shrink:0">×</button></div><div class="phrase-copied">✓ Copied!</div></div>`:'').join('');
+      return`<div class="card"><div class="card-title"><span class="card-title-left">📁 ${cat}</span></div>${builtIn}${mine}</div>`;
+    }).join('')}
+    ${!custom.length?`<div class="alert alert-info" style="font-size:12px">💡 Tap "+ Add Phrase" to save your own phrases — they'll appear here alongside the built-in ones.</div>`:''}`;
 }
+window.openAddCustomPhrase=function(){['cp-title','cp-text'].forEach(id=>document.getElementById(id).value='');openModal('modal-custom-phrase');};
+window.saveCustomPhrase=async function(){
+  const title=document.getElementById('cp-title').value.trim();
+  const text=document.getElementById('cp-text').value.trim();
+  if(!title||!text){alert('Please fill in both title and phrase text.');return;}
+  const cat=document.getElementById('cp-cat').value;
+  S.customPhrases=S.customPhrases||[];
+  S.customPhrases.push({title,text,cat});
+  await fbSave('meta','customPhrases',{items:S.customPhrases});
+  closeModal('modal-custom-phrase');
+  renderPhrases();
+};
+window.delCustomPhrase=async function(i){
+  if(!confirm('Delete this phrase?'))return;
+  S.customPhrases.splice(i,1);
+  await fbSave('meta','customPhrases',{items:S.customPhrases});
+  renderPhrases();
+};
 window.copyPhrase=function(key,el){const text=phraseData[key];navigator.clipboard.writeText(text).then(()=>showCopied(el)).catch(()=>{const ta=document.createElement('textarea');ta.value=text;document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta);showCopied(el);});};
 function showCopied(el){const c=el.querySelector('.phrase-copied');if(c){c.style.display='block';setTimeout(()=>c.style.display='none',2000);}}
 
